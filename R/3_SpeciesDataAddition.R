@@ -88,14 +88,26 @@ species_absen_data$dist_n_pop <- nn_nearest_abs$nn.dist[,1]
 nn_nearby_abs <- get.knnx(species_prese_data[c("utm_x","utm_y")],species_absen_data[c("utm_x","utm_y")],k=70)
 
 # File this down to all populations within 5000m.
-number_nearby_pop <- nn_nearby_abs$nn.dist
-number_nearby_pop[number_nearby_pop < 5000] <- 1
-number_nearby_pop[number_nearby_pop >= 5000] <- 0
-number_nearby_pop_vec <- rowSums(number_nearby_pop)
+number_nearby_pop_5km <- nn_nearby_abs$nn.dist
+number_nearby_pop_5km[number_nearby_pop_5km < 5000] <- 1
+number_nearby_pop_5km[number_nearby_pop_5km >= 5000] <- 0
+number_nearby_pop_5km_vec <- rowSums(number_nearby_pop_5km)
+
+# And 10km, and 20km
+number_nearby_pop_10km <- nn_nearby_abs$nn.dist
+number_nearby_pop_10km[number_nearby_pop_10km < 10000] <- 1
+number_nearby_pop_10km[number_nearby_pop_10km >= 10000] <- 0
+number_nearby_pop_10km_vec <- rowSums(number_nearby_pop_10km)
+
+number_nearby_pop_20km <- nn_nearby_abs$nn.dist
+number_nearby_pop_20km[number_nearby_pop_20km < 20000] <- 1
+number_nearby_pop_20km[number_nearby_pop_20km >= 20000] <- 0
+number_nearby_pop_20km_vec <- rowSums(number_nearby_pop_20km)
 
 # Put this into a data frame which we will then add more to later on.
-spatial_data <- data.frame(species_absen_data$no_vatn_lnr, nn_nearest_abs$nn.dist, number_nearby_pop_vec)
-colnames(spatial_data) <- c("no_vatn_lnr","dist_n_pop","no_n_pop")
+spatial_data <- data.frame(species_absen_data$no_vatn_lnr, nn_nearest_abs$nn.dist, 
+                           number_nearby_pop_5km_vec, number_nearby_pop_10km_vec, number_nearby_pop_20km_vec)
+colnames(spatial_data) <- c("no_vatn_lnr","dist_n_pop","no_n_pop_5km", "no_n_pop_10km", "no_n_pop_20km")
 
 # Now we cycle through year by year. All presences in native range are assumed to have been there ebfore the
 # first time-step.
@@ -107,24 +119,37 @@ for (i in 1:length(time_steps)) {
   
   # Special case for first time step for Rainbow Trout, since they have no historic range in Norway.
   if (nrow(species_presence_historic) == 0) {
-    spatial_data_timeStep <- data.frame(species_intro_historic$no_vatn_lnr, 9999999, 0)
-    colnames(spatial_data_timeStep) <- c("no_vatn_lnr","dist_n_pop","no_n_pop")
+    spatial_data_timeStep <- data.frame(species_intro_historic$no_vatn_lnr, 9999999, 0, 0, 0)
+    colnames(spatial_data_timeStep) <- c("no_vatn_lnr","dist_n_pop","no_n_pop_5km", "no_n_pop_10km", "no_n_pop_20km")
   } else {
   
   nn_nearest <- get.knnx(species_presence_historic[c("utm_x","utm_y")],species_intro_historic[c("utm_x","utm_y")],k=2)
   # Same as above, but need to make sure we don't include a lake as its own enarest population
   nearest_pop_vec <- ifelse(nn_nearest$nn.dist[,1]==0,nn_nearest$nn.dist[,2],nn_nearest$nn.dist[,1])
   
-  k_nearby <- ifelse(nrow(species_presence_historic) < 70, nrow(species_presence_historic)-1, 70)
+  k_nearby <- ifelse(nrow(species_presence_historic) < 100, nrow(species_presence_historic)-1, 100)
   
   nn_nearby <- get.knnx(species_presence_historic[c("utm_x","utm_y")],species_intro_historic[c("utm_x","utm_y")],k=k_nearby)
-  number_nearby_pop <- nn_nearby$nn.dist
-  number_nearby_pop[number_nearby_pop < 5000 & number_nearby_pop > 0] <- 1
-  number_nearby_pop[number_nearby_pop >= 5000] <- 0
-  number_nearby_pop_vec <- rowSums(number_nearby_pop)
   
-  spatial_data_timeStep <- data.frame(species_intro_historic$no_vatn_lnr, nearest_pop_vec, number_nearby_pop_vec)
-  colnames(spatial_data_timeStep) <- c("no_vatn_lnr","dist_n_pop","no_n_pop")
+  number_nearby_pop_5km <- nn_nearby$nn.dist
+  number_nearby_pop_5km[number_nearby_pop_5km < 5000 & number_nearby_pop_5km > 0] <- 1
+  number_nearby_pop_5km[number_nearby_pop_5km >= 5000] <- 0
+  number_nearby_pop_5km_vec <- rowSums(number_nearby_pop_5km)
+  
+  # And 10km, and 20km
+  number_nearby_pop_10km <- nn_nearby$nn.dist
+  number_nearby_pop_10km[number_nearby_pop_10km < 10000] <- 1
+  number_nearby_pop_10km[number_nearby_pop_10km >= 10000] <- 0
+  number_nearby_pop_10km_vec <- rowSums(number_nearby_pop_10km)
+  
+  number_nearby_pop_20km <- nn_nearby$nn.dist
+  number_nearby_pop_20km[number_nearby_pop_20km < 20000] <- 1
+  number_nearby_pop_20km[number_nearby_pop_20km >= 20000] <- 0
+  number_nearby_pop_20km_vec <- rowSums(number_nearby_pop_20km)
+  
+  spatial_data_timeStep <- data.frame(species_intro_historic$no_vatn_lnr, nearest_pop_vec, 
+                                      number_nearby_pop_5km_vec, number_nearby_pop_10km_vec, number_nearby_pop_20km_vec)
+  colnames(spatial_data_timeStep) <- c("no_vatn_lnr","dist_n_pop","no_n_pop_5km", "no_n_pop_10km", "no_n_pop_20km")
   }
   
   spatial_data <- rbind(spatial_data,spatial_data_timeStep)
@@ -139,14 +164,12 @@ for (i in 1:length(time_steps)) {
 #
 #---------------------------------------------------------------------#
 
-# Now that we have these variables, need to produce a data frame full of only data that can be used in
-# our model (everything outside the native range)
-species_model_data <- species_data %>%
-  filter(native==0)
+# Now that we have these variables, need to produce a data frame free of incomplete cases.
+# HOWEVER, we still need lakes outside the native range to find total number of rpesences
+# nearby, so we keep these
+species_model_data <- merge(species_data,spatial_data, all.x=TRUE, by="no_vatn_lnr")
 
-species_model_data <- merge(species_model_data,spatial_data, all.x=TRUE, by="no_vatn_lnr")
-
-species_model_data <- species_model_data[complete.cases(species_model_data),]
+species_model_data <- species_model_data[complete.cases(species_model_data) | species_model_data$native == 1,]
 
 # Find duplicates
 # all_data %>% group_by(no_vatn_lnr) %>%
@@ -169,8 +192,7 @@ display_duplicates <- function(duplicated_vatn_Lnrs) {
 
 # We're now dealing with species-specific data. All the data will be transferred to one file. 
 # Create that file if it hasn't already been made.
-if (dir.exists(paste0("./Data/Species_Data"))) == FALSE
-) {dir.create(paste0("./Data/Species_Data"))}
+if (dir.exists(paste0("./Data/Species_Data")) == FALSE) {dir.create(paste0("./Data/Species_Data"))}
 
 
 if (dir.exists(paste0("./Data/Species_Data/",gsub(' ','_',focal_species))) == FALSE

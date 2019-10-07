@@ -9,9 +9,13 @@ return(new_vector)}
 sc_gr <- function(vector) {new_vector <- as.numeric(scale(vector))
 return(new_vector)}
 
+# Define which distance threshold we're using
+raw_data$no_n_pop <- raw_data[,paste0("no_n_pop_",population_threshold,"km")]
+
 
 # We now filter our data to get lakes larger than 2 ha
 env_data <- raw_data %>%
+  filter(native==0) %>%
   transmute(areaL = log_sc_gr(area_km2),
             dist_roadL = log_sc_gr(distance_to_road),
             temp = sc_gr(eurolst_bio10),
@@ -21,9 +25,11 @@ env_data <- raw_data %>%
             no_n_popL = log_sc_gr(no_n_pop))
 
 intro_data <- raw_data %>%
+  filter(native==0) %>%
   dplyr::select(introduced)
 
 id_data <- raw_data %>%
+  filter(native==0) %>%
   dplyr::select(locationID)
 
 
@@ -63,7 +69,7 @@ whole_draws_extra <- extra_samples(whole_draws,n_samples = 1000)
 print("Finished running draws, saving data now.")
 
 whole_model_output <- list(draws = whole_draws_extra, beta = beta, alpha = alpha, p = p)
-saveRDS(whole_model_output, file=paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/whole_model_output.RDS"))
+saveRDS(whole_model_output, file=paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/whole_model_output_",population_threshold,"km.RDS"))
 
 whole_model_data <- list(raw_data = raw_data, env_data = env_data, intro_data = intro_data, id_data = id_data)
-saveRDS(whole_model_data, file=paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/whole_model_data.RDS"))
+saveRDS(whole_model_data, file=paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/whole_model_data_",population_threshold,"km.RDS"))

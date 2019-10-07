@@ -60,7 +60,7 @@ source("./R/2_BioticDataAddition.R")
 
 # From now on everything becomes species specific.
 
-focal_species <- species_list[4]
+focal_species <- species_list[2]
 
 # Now we run the preliminary model. Only thing we need to choose is what our size limit 
 # on lakes will be.
@@ -70,17 +70,13 @@ focal_species <- species_list[4]
 
 source("./R/3_SpeciesDataAddition.R")
 
+# Define radius you want to measure nearby populations by
+population_threshold <- 5
 
 # This script will take a while, as it's running a model on up to 250,000 lakes. Grab a 
 # coffee. Teach it to do algebra.
 source("./R/4_FullModelConstruct.R")
 
-# Now we run a second model, using buffered data
-source("./R/4_BufferedModelConstruct.R")
-
-# The output from this is the same as the second, except that you get a map as well
-# showing what the buffered region looks like.
-plot(comb_bif)
 
 # Next one gives you uncertainty from each lake, convergence diagnostic,
 # beta intervals, and model deviance.
@@ -104,8 +100,7 @@ source("./R/7_Visualisations.R")
 
 
 
-
-maps$predicted_appearances$layers
-
+maps$initial_appearances
+maps$predicted_appearances
 
 

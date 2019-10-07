@@ -1,3 +1,17 @@
+#---------------------------------------------------------------------#
+# 6. Forecasting
+#---------------------------------------------------------------------#
+
+
+#---------------------------------------------------------------------#
+# 6A. Get Scaling Parameters
+#
+# Variables within the model will change, but they have to be scaled 
+# using the same mands and SDs as our original data, so we need to define
+# those first.
+#
+#---------------------------------------------------------------------#
+
 
 # Import data and draws and define components
 
@@ -19,9 +33,10 @@ alpha <- model_output$alpha
 # Whatever data/model we are using for out parameters, we are now applying the parameters to all the data.
 # That means we need to scale all the data using whatever means and SDs with which we scaled the data that
 # was used for the moel.
-data_4scaling <- model_data_extra$raw_data
+model_data <- model_data_extra$raw_data %>%
+  filter(native == 0)
 #env_var <- c("HFP", "nearby_pops", "pop_dist", "area_km2", "perimeter_m", "distance_to_road", "eurolst_bio10")
-data_4scaling <- data_4scaling %>%
+data_4scaling <- model_data %>%
   transmute(areaL = log(area_km2+1),
             dist_roadL = log(distance_to_road+1),
             temp = eurolst_bio10,
@@ -39,10 +54,19 @@ env_data <- model_data_extra$env_data
 
 print("Data is scaled.")
 
+#---------------------------------------------------------------------#
+# 6B. Set Figures Beforehand
+#
+# We need to set up a bunch of parameters to use in the forecasting
+# script. 
+#
+#---------------------------------------------------------------------#
+
 ### Get betas and alphas
 calc_beta <- apply(as.matrix(calculate(beta,draws)),2,mean)
 calc_alpha <- apply(as.matrix(calculate(alpha,draws)),2,mean)
 
+# Need vector of where we have presences outside of the native range at the moment
 presences <- model_data_extra$intro_data$introduced
 
 # Get full index of nearby lakes that have a chance of colonisation, then narrow them down to lakes within 5000m
@@ -51,7 +75,7 @@ eta <- sweep(attempt, 2, calc_alpha, "+")
 expeta <- exp(eta)
 init_probabilities <- expeta/(1+expeta)
 
-nn_all <- get.knnx(raw_data[,c("utm_x","utm_y")],raw_data[c("utm_x","utm_y")],k=100)
+nn_all <- get.knnx(raw_data[,c("utm_x","utm_y")],model_data[c("utm_x","utm_y")],k=100)
 nn_all$nn.index[nn_all$nn.dist > 5000 | nn_all$nn.dist == 0] <- 0
 
 
@@ -76,6 +100,14 @@ periods <- matrix(NA,nrow=nrow(env_data),ncol=n_loops)
 # populations <- list()
 
 print("Other stuff in place, starting forecast run.")
+
+
+#---------------------------------------------------------------------#
+# 6C. Run Forecasting Loop
+#
+#
+#---------------------------------------------------------------------#
+
 
 time1 <- Sys.time()
 # data <- list()
@@ -116,10 +148,15 @@ for (s in 1:n_loops) {
       newData2[,"temp"] <- newData2[,"temp"] + tempIncrease
       
       # Now figure out the new distance to closest population
-      pop_proximity <- cbind(all_presences, raw_data[,c("utm_x","utm_y","decimalLatitude","decimalLongitude","locationID")])
+      pop_proximity <- cbind(all_presences, model_data[,c("utm_x","utm_y","decimalLatitude","decimalLongitude","locationID")])
       
-      data_presences <- as.data.frame(pop_proximity %>% filter(all_presences == 1)
-                                      %>% dplyr::select(locationID, utm_x, utm_y, decimalLongitude, decimalLatitude))
+      # Need to bind our new presences together with all the presences in the native range.
+      data_presences_nonnative <- as.data.frame(pop_proximity %>% filter(all_presences == 1) %>% 
+                                                  dplyr::select(locationID, utm_x, utm_y, decimalLongitude, decimalLatitude))
+      data_presences_native <- raw_data %>% filter(native == 1 & presence == 1) %>% 
+                                                dplyr::select(locationID, utm_x, utm_y, decimalLongitude, decimalLatitude)
+      data_presences <- rbind(data_presences_nonnative, data_presences_native)
+      
       data_all <- pop_proximity %>%
         dplyr::select(utm_x,utm_y,locationID, decimalLongitude, decimalLatitude) %>%
         distinct() %>%
@@ -134,7 +171,7 @@ for (s in 1:n_loops) {
       locationID <- data_all$locationID
       distance_data <- as.data.frame(cbind(dist_to_closest_pop,locationID))
       
-      ordered_distances <- merge(raw_data["locationID"],distance_data,all.x=TRUE,by="locationID")
+      ordered_distances <- merge(model_data["locationID"],distance_data,all.x=TRUE,by="locationID")
       
       new_distances <- log(as.numeric(as.character(ordered_distances$dist_to_closest_pop))+1)
       
@@ -144,26 +181,11 @@ for (s in 1:n_loops) {
       
       # Now we need to get the new measurements for number of close populations
       
-      # And we take the number of lakes within a threshold of x metres by converting all distances less than x to 1, 
-      # then simply summing the columns
-      # pts_presence <- data_presences %>%
-      #   transmute(latitude = decimalLatitude, longitude = decimalLongitude)
-      # pts_presence <- st_as_sf(pts_presence, coords = c("longitude", "latitude"), 
-      #                          crs = 4326)
-      # pts_presence <-  st_transform(pts_presence, 32633)
-      # 
-      # pts_all <- all_data %>%
-      #   transmute(latitude = decimalLatitude, longitude = decimalLongitude)
-      # pts_all <- st_as_sf(pts_all, coords = c("longitude", "latitude"), 
-      #                     crs = 4326)
-      # pts_all <-  st_transform(pts_all, 32633)
-      # pts_buf <- sf::st_buffer(pts_all, 5000)
-      # 
-      # int <- sf::st_intersects(pts_buf, pts_presence)
-      # number_nearby_pop_vec <- lengths(int)
+      all_presence_table <- raw_data["locationID"]
+      all_presence_table$present <- ifelse(all_presence_table$locationID %in% data_presences$locationID, 1, 0)
       
       
-      rowNumbers_withPresence <- which(pop_proximity$all_presences==1)
+      rowNumbers_withPresence <- which(all_presence_table$present==1)
       nn_inds <- nn_all$nn.index
       nn_inds[!(nn_inds %in% rowNumbers_withPresence)] <- 0
       nn_inds[nn_inds %in% rowNumbers_withPresence] <- 1
@@ -197,18 +219,9 @@ for (s in 1:n_loops) {
   periods[,s] <- all_presences
 }
 
-# period_introductions <- matrix(NA, nrow=nrow(all_data), ncol=ncol(periods))
-# all_period_introductions <- list()
 
 print("Finished forecasting.")
 
-# ## Need to reorganise tables now
-# for (j in 1:ncol(periods[[1]])) {
-#   for (i in 1:length(periods)) {
-#     period_introductions[,i] <- periods[[i]][,j]    
-#   }
-#   all_period_introductions[[j]] <- period_introductions
-# }
 
 forecasts <- periods
 saveRDS(forecasts, file=paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/forecasts.RDS"))
