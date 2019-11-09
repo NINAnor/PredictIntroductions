@@ -15,13 +15,11 @@
 
 # Import data and draws and define components
 
-if (use_buffered_model == TRUE) {
-  model_output <- readRDS(paste0("./Data/",gsub(' ','_',focal_species),"/buffered_model_output.RDS"))
-  model_data_extra <- readRDS(paste0("./Data/",gsub(' ','_',focal_species),"/buffered_model_data.RDS"))
-} else {
-  model_output <- readRDS(paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/whole_model_output.RDS"))
-  model_data_extra <- readRDS(paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/whole_model_data.RDS"))
-}
+model_output <- readRDS(paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/whole_model_output_",population_threshold,"km.RDS"))
+model_data_extra <- readRDS(paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/whole_model_data_",population_threshold,"km.RDS"))
+catchment_data <- readRDS("./Data/lakesInCatchments.RDS")
+catchment_mapDF <- map_df(catchment_data$catchmentsByLake, ~data.frame(waterBodyID=.),.id="ebint")
+
 
 raw_data <- model_data_extra$raw_data
 
@@ -43,7 +41,9 @@ data_4scaling <- model_data %>%
             pop_distL = log(dist_n_pop+1),
             SCI = log(((perimeter_m/1000)/(2*sqrt(pi*area_km2)))+1),
             HFP = HFP,
-            n_pop = log(no_n_pop+1))
+            n_pop = log(no_n_pop+1),
+            upstream_pop = log(upstream_pops+1),
+            downstream_pop = log(downstream_pops+1))
 
 # Get the means and sds to work with
 means_relData <- apply(data_4scaling, 2, mean)
@@ -66,17 +66,21 @@ print("Data is scaled.")
 calc_beta <- apply(as.matrix(calculate(beta,draws)),2,mean)
 calc_alpha <- apply(as.matrix(calculate(alpha,draws)),2,mean)
 
+# Get betas and alphas for the looping
+beta_init <- as.matrix(calculate(beta,draws))
+alpha_init <- as.matrix(calculate(alpha,draws))
+
+set.seed(147)
+chosen_iterations <- sample(1:nrow(alpha_init), n_loops)
+
+beta_mat <- beta_init[chosen_iterations,]
+alpha_mat <- alpha_init[chosen_iterations,]
+
 # Need vector of where we have presences outside of the native range at the moment
 presences <- model_data_extra$intro_data$introduced
 
-# Get full index of nearby lakes that have a chance of colonisation, then narrow them down to lakes within 5000m
-attempt <- as.matrix(env_data) %*% as.matrix(calc_beta)
-eta <- sweep(attempt, 2, calc_alpha, "+")
-expeta <- exp(eta)
-init_probabilities <- expeta/(1+expeta)
-
 nn_all <- get.knnx(raw_data[,c("utm_x","utm_y")],model_data[c("utm_x","utm_y")],k=100)
-nn_all$nn.index[nn_all$nn.dist > 5000 | nn_all$nn.dist == 0] <- 0
+nn_all$nn.index[nn_all$nn.dist > population_threshold * 1000 | nn_all$nn.dist == 0] <- 0
 
 
 periods <- list()
@@ -84,8 +88,9 @@ periods <- list()
 # These variables define actions in the loop
 number_reps <- 5
 
-# This defines in incremental increase over 50 years based on a 1 degree increase in temperature over 50 years. 10 represents a 1 degree increase.
-temp_step <- 21/SDs_relData["temp"]
+# This defines in incremental increase over 50 years based on a 1 degree increase in temperature over 50 years.
+# 10 represents a 1 degree increase. If the temp_scenariop is unnecessary, it just adds 0 every time.
+temp_step <- ifelse(temp_scenario == TRUE,21/SDs_relData["temp"],rep(0,length(SDs_relData["temp"])))
 
 # These variables will be used to scale projections of numnber of populations nearby and distance to nearest population
 mean_n_pop <- means_relData["n_pop"]
@@ -93,6 +98,12 @@ sd_n_pop <- SDs_relData["n_pop"]
 
 sd_dist <- SDs_relData["pop_distL"]
 mean_dist <- means_relData["pop_distL"]
+
+mean_upstream <- means_relData["upstream_pop"]
+sd_upstream <- SDs_relData["upstream_pop"]
+
+mean_downstream <- means_relData["downstream_pop"]
+sd_downstream <- SDs_relData["downstream_pop"]
 
 introductions <- matrix(NA,nrow=nrow(env_data),ncol=1)
 periods <- matrix(NA,nrow=nrow(env_data),ncol=n_loops)
@@ -120,19 +131,14 @@ for (s in 1:n_loops) {
       
       tempIncrease <- rnorm(nrow(env_data), temp_step/5, 0.05)
       newData <- env_data
-      newData[,"temp"] <- newData[,"temp"] + tempIncrease
+      newData[,"temperature"] <- newData[,"temperature"] + tempIncrease
       
       # Unfortunately because we're predicting for 600k + lakes, it's impossible to run the preditions all at one. So the loop below runs them in chunks of 10k lakes at a time.
       
-      attempt <- as.matrix(newData) %*% as.matrix(calc_beta)
-      eta <- greta::sweep(attempt, 2, calc_alpha, "+")
+      attempt <- as.matrix(newData) %*% as.matrix(beta_mat[s,])
+      eta <- greta::sweep(attempt, 2, alpha_mat[s], "+")
       expeta <- exp(eta)
       probabilities <- expeta/(1+expeta)
-      
-      # # # Now figure out which first upstream lakes pike have spread to using the gradient you defined before. I wrote a function for this which has been loaded above.
-      # introductions_by_dispersal <- introduction_by_dispersal(full_data[full_data$Esox_lucius==1,]$waterBodyID,200, connect_db)
-      # new_presences <- ifelse(full_data$Esox_lucius ==1, 1, ifelse(threshold_var > threshold_int, 1, ifelse(full_data$waterBodyID %in% introductions_by_dispersal,1, 0)))
-      # 
       
       # Establish which lakes now have presences by asking whether or not we have an introduction, based on a bernoulli estimate.
       new_presences <- rbinom(length(probabilities), size = 1, prob=probabilities)
@@ -145,7 +151,7 @@ for (s in 1:n_loops) {
       
       # Introduce the new temperature thing first, it's the simplest
       tempIncrease <- rnorm(nrow(newData2), temp_step/5, 0.05)
-      newData2[,"temp"] <- newData2[,"temp"] + tempIncrease
+      newData2[,"temperature"] <- newData2[,"temperature"] + tempIncrease
       
       # Now figure out the new distance to closest population
       pop_proximity <- cbind(all_presences, model_data[,c("utm_x","utm_y","decimalLatitude","decimalLongitude","locationID")])
@@ -171,19 +177,17 @@ for (s in 1:n_loops) {
       locationID <- data_all$locationID
       distance_data <- as.data.frame(cbind(dist_to_closest_pop,locationID))
       
-      ordered_distances <- merge(model_data["locationID"],distance_data,all.x=TRUE,by="locationID")
+      ordered_distances <- merge(model_data,distance_data,all.x=TRUE,by="locationID") %>%
+        arrange(no_vatn_lnr)
       
       new_distances <- log(as.numeric(as.character(ordered_distances$dist_to_closest_pop))+1)
       
       # So now that we have the new measurements for closest population, these need to be scaled against those that we had for the initial population. So we subtract the mean and divide by the standard deviation.
-      
-      newData2[,"dist_n_popL"] <- (new_distances-mean_dist)/sd_dist
+      newData2[,"distance_nearest_population"] <- (new_distances-mean_dist)/sd_dist
       
       # Now we need to get the new measurements for number of close populations
-      
-      all_presence_table <- raw_data["locationID"]
+      all_presence_table <- raw_data[,c("locationID","waterBodyID","no_vatn_lnr")]
       all_presence_table$present <- ifelse(all_presence_table$locationID %in% data_presences$locationID, 1, 0)
-      
       
       rowNumbers_withPresence <- which(all_presence_table$present==1)
       nn_inds <- nn_all$nn.index
@@ -193,10 +197,57 @@ for (s in 1:n_loops) {
       # 
       # Scale it like we did for the last variable
       
-      newData2[,"no_n_popL"] <- (number_nearby_pop_vec-mean_n_pop)/sd_n_pop
+      newData2[,"number_nearby_populations"] <- (number_nearby_pop_vec - mean_n_pop)/sd_n_pop
       
-      attempt <- as.matrix(newData2) %*% as.matrix(calc_beta)
-      eta <- sweep(attempt, 2, calc_alpha, "+")
+      # Now we need the number of populations upstream
+      catchment_mapDF_ts <- catchment_mapDF
+      
+      # Get list of all water bodies with presence
+      all_WB_present <- all_presence_table[all_presence_table$present == 1,"waterBodyID"]
+      catchment_mapDF_ts$present <- ifelse(catchment_mapDF_ts$waterBodyID %in% all_WB_present, 1,0)
+      # Define how many populations there are in each catchment
+      new_upstream_pops <- catchment_mapDF_ts %>%
+        group_by(ebint) %>%
+        summarize(upstream_pops = sum(present))
+      upstream_forNewData <- merge(model_data[,c("waterBodyID","ebint","no_vatn_lnr")], new_upstream_pops, all.x=TRUE, by = "ebint") %>%
+        arrange(no_vatn_lnr)
+      # We still have NAs where a lake isn't in its corresponding catchment
+      # These can become zeroes, as there clearly isn't anything upstream in that catchment anyway
+      upstream_forNewData$upstream_pops[is.na(upstream_forNewData$upstream_pops)] <- 0
+      # If we have a situation where we have 2 presences and one of them is the focal lake, we need to reduce
+      # the number of upstream lakes to 1.
+      upstream_forNewData$upstream_pop_consol <- ifelse(upstream_forNewData$waterBodyID %in% all_WB_present,
+                                                        upstream_forNewData$upstream_pops - 1, upstream_forNewData$upstream_pops)
+      # We may have a couple of stray negatives. These can simply become 0.
+      upstream_forNewData$upstream_pop_consol[upstream_forNewData$upstream_pop_consol<0] <- 0
+      
+      number_upstream_populations <- log(upstream_forNewData$upstream_pop_consol + 1)
+      newData2[,"number_upstream_populations"] <- (number_upstream_populations - mean_upstream)/sd_upstream
+      
+      # Need the number of populations downstream now
+      basin_mapDF <- raw_data[,c("waterBodyID","eb_waterregionID")] 
+      basin_mapDF <- basin_mapDF[!duplicated(basin_mapDF),]
+      basin_mapDF$present <- ifelse(basin_mapDF$waterBodyID %in% all_WB_present, 1,0)
+      # Define how many populations there are in each basin
+      new_downstream_pops <- basin_mapDF %>%
+        group_by(eb_waterregionID) %>%
+        summarize(downstream_pops = sum(present))
+      downstream_forNewData <- merge(model_data[,c("waterBodyID","eb_waterregionID","no_vatn_lnr")], new_downstream_pops
+                                     , all.x=TRUE, by = "eb_waterregionID") %>%
+        arrange(no_vatn_lnr)
+      downstream_forNewData$downstream_pop_consol <- ifelse(downstream_forNewData$waterBodyID %in% all_WB_present,
+                                                          downstream_forNewData$downstream_pops - 1, downstream_forNewData$downstream_pops)
+      downstream_forNewData$downstream_pop_consol <- downstream_forNewData$downstream_pop_consol - upstream_forNewData$upstream_pop_consol
+      # Once more, get rid of negatives
+      downstream_forNewData$downstream_pop_consol[downstream_forNewData$downstream_pop_consol < 0] <- 0
+      
+      number_downstream_populations <- log(downstream_forNewData$downstream_pop_consol + 1)
+      newData2[,"number_downstream_populations"] <- (number_downstream_populations - mean_downstream)/sd_downstream    
+      
+      
+      # Make new calculations
+      attempt <- as.matrix(newData2) %*% as.matrix(beta_mat[s,])
+      eta <- sweep(attempt, 2, alpha_mat[s], "+")
       expeta <- exp(eta)
       probabilities <- expeta/(1+expeta)
       
@@ -215,7 +266,7 @@ for (s in 1:n_loops) {
   time2 <- Sys.time()
   difftime_1 <- round(as.numeric(difftime(time2, time1,
                                           units = "mins")),3)
-  if (s %% 5 == 0) {print(paste0("Run ", s, " of ",  n_loops, " finished in ",difftime_1, " minutes. Estimated ", round(difftime_1*n_loops/s-difftime_1,5), " minutes left."))}
+  if (s %% 20 == 0) {print(paste0("Run ", s, " of ",  n_loops, " finished in ",difftime_1, " minutes. Estimated ", round(difftime_1*n_loops/s-difftime_1,5), " minutes left."))}
   periods[,s] <- all_presences
 }
 
@@ -224,6 +275,10 @@ print("Finished forecasting.")
 
 
 forecasts <- periods
-saveRDS(forecasts, file=paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/forecasts.RDS"))
-summary(forecasts)
-summary(rowSums(forecasts)/100)
+
+if (temp_scenario == TRUE) {
+  saveRDS(forecasts, file=paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/forecasts_",population_threshold,"km_wTempIncrease.RDS"))
+} else {
+  saveRDS(forecasts, file=paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/forecasts_",population_threshold,"km.RDS"))
+}
+
