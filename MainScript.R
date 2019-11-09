@@ -1,4 +1,4 @@
-### Overarchign script, tying everythign together
+### Overarching script, tying everythign together
 
 ### Let's get all the libraries in
 
@@ -17,6 +17,8 @@ library(readr)
 library(ggplot2)
 library(greta)
 library(stringr)
+library(lwgeom)
+library(purrr)
 source("ExtraFunctions.R")
 
 
@@ -52,15 +54,16 @@ source("./R/1_GetIntroductions.R")
 # calculated regardless of species.
 
 
-size_threshold <- 0.02
+size_threshold <- 0.02               # All lakes below this size in km2 will be discarded.
 
-HFP_download <- TRUE                # Set this to false if you already have raster data downloaded in your data folder.
+HFP_download <- FALSE                # Set this to false if you already have raster data downloaded in your data folder.
+catchment_download <- FALSE          # Set this to false if you already have the lakes sorted by catchment and the 
+                                     # catchment geometries downloaded. This takes AGES, so the default is always false here.
 
 source("./R/2_BioticDataAddition.R")
 
 # From now on everything becomes species specific.
-
-focal_species <- species_list[2]
+focal_species <- species_list[5]
 
 # Now we run the preliminary model. Only thing we need to choose is what our size limit 
 # on lakes will be.
@@ -71,36 +74,47 @@ focal_species <- species_list[2]
 source("./R/3_SpeciesDataAddition.R")
 
 # Define radius you want to measure nearby populations by
-population_threshold <- 5
+population_threshold <- 10
 
-# This script will take a while, as it's running a model on up to 250,000 lakes. Grab a 
+# Parameters used in the model are as follows.
+# 1. Lake_area
+# 2. Distance to nearest road
+# 3. Average temperature of warmest quarter
+# 4. Euclidean distance to the nearest population
+# 5. Shoreline complexity
+# 6. Human footprint index
+# 7. Number of populations within km radius specified by 'population threshold'
+# 8. Number of populations upstream
+# 9. Number of populations downstream
+# To leave one or more of these parameters out, simply input the number into the object below.
+parameters_to_ignore <- NA
+
+# This script will take a while, as it's running a model on up to 40,000 lakes. Grab a 
 # coffee. Teach it to do algebra.
 source("./R/4_FullModelConstruct.R")
-
 
 # Next one gives you uncertainty from each lake, convergence diagnostic,
 # beta intervals, and model deviance.
 # 
-use_buffered_model <- FALSE
 source("./R/5_ModelAnalysis.R")
+
 
 # Now we can run our simulations. need to define which model we want to use.
 # n_loops simply tells us how many iterations we want to run. Be careful,
-# because the run time can be enormous.
-n_loops <- 100
+# because the run time can be enormous. With 40,000 lakes, 100 loops generally
+# takes 10 minutes. Obviously the temp_scenario object dictates whether or not 
+# you want to introduced an increase in temperature.
+n_loops <- 1000
+temp_scenario <- FALSE
 
 source("./R/6_Looping.R")
 
-# Last step is simply doing some data visualisation.
+# Last step is simply doing some data visualisation. n_bins dictates resolution of
+# your hexagons. f you have already downloaded basin data, let download_basins =
+# FALSE.
 
-prob_threshold <- 0.5
-axis_limit <- 150
+n_bins <- 90
+download_basins=FALSE
 
 source("./R/7_Visualisations.R")
-
-
-
-maps$initial_appearances
-maps$predicted_appearances
-
 
