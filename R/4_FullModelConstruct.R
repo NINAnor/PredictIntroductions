@@ -1,4 +1,10 @@
-
+#---------------------------------------------------------------------#
+# 4. Creating model ####
+#
+# This creates the model, simple as that.
+# 
+# 
+#---------------------------------------------------------------------#
 
 # Import raw data
 raw_data <- readRDS(paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/species_model_data.RDS"))
@@ -13,17 +19,25 @@ return(new_vector)}
 raw_data$no_n_pop <- raw_data[,paste0("no_n_pop_",population_threshold,"km")]
 
 
-# We now filter our data to get lakes larger than 2 ha
+# We now get rid of all lakes in the native range and transform variables.
 env_data <- raw_data %>%
   filter(native==0) %>%
-  transmute(areaL = log_sc_gr(area_km2),
-            dist_roadL = log_sc_gr(distance_to_road),
-            temp = sc_gr(eurolst_bio10),
-            dist_n_popL = log_sc_gr(dist_n_pop),
-            sciL = log_sc_gr((perimeter_m/1000)/(2*sqrt(pi*area_km2))),
-            HFP = sc_gr(HFP),
-            no_n_popL = log_sc_gr(no_n_pop))
+  transmute(lake_area = log_sc_gr(area_km2),
+            distance_to_road = log_sc_gr(distance_to_road),
+            temperature = sc_gr(eurolst_bio10),
+            distance_nearest_population = log_sc_gr(dist_n_pop),
+            shoreline_complexity = log_sc_gr((perimeter_m/1000)/(2*sqrt(pi*area_km2))),
+            human_footprint = sc_gr(HFP),
+            number_nearby_populations = log_sc_gr(no_n_pop),
+            number_upstream_populations = log_sc_gr(upstream_pops),
+            number_downstream_populations = log_sc_gr(downstream_pops))
 
+# Get rid of any parameters we want to ignore.
+if(!is.na(parameters_to_ignore)) {
+  env_data <- env_data[,-parameters_to_ignore]
+}
+
+# Create presence data
 intro_data <- raw_data %>%
   filter(native==0) %>%
   dplyr::select(introduced)
@@ -64,7 +78,7 @@ print("Constructed model, running draws now.")
 # The following then creates our MCMC draws
 whole_draws <- greta::mcmc(prelim_model,n_samples = 500, warmup = 500)
 print("Finished running first draws, running extra draws now.")
-whole_draws_extra <- extra_samples(whole_draws,n_samples = 1000)
+whole_draws_extra <- extra_samples(whole_draws,n_samples = 500)
 
 print("Finished running draws, saving data now.")
 
