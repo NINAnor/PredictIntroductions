@@ -6,70 +6,231 @@
 # temperature. 
 
 
+forecasts_wIncrease <- readRDS(file=paste0("./Data/Species_Data/",gsub(' ','_',focal_species),
+                                           "/forecasts_",population_threshold,"km_wTempIncrease.RDS"))
+forecasts_noIncrease <- readRDS(file=paste0("./Data/Species_Data/",gsub(' ','_',focal_species),
+                                            "/forecasts_",population_threshold,"km.RDS"))
 
-forecasts <- readRDS(file=paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/forecasts.RDS"))
-lake_likelihoods <- apply(forecasts, 1, mean)
+#---------------------------------------------------------------------#
+# 7A. Create table of forecasting stats
+# 
+# Basically we want to create an enormous table with introduction
+# probabilities, uncertainties, effects of temperature.
+#---------------------------------------------------------------------#
 
-all_data <- readRDS(paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/whole_model_data.RDS"))
-analytics <- readRDS(paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/whole_model_analytics.RDS"))
+lake_likelihoods_wIncrease <- apply(forecasts_wIncrease, 1, mean)
+lake_likelihoods_noIncrease <- apply(forecasts_noIncrease, 1, mean)
 
-raw_data <- all_data$raw_data
+all_data <- readRDS(paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/whole_model_data_",population_threshold,"km.RDS"))
+analytics <- readRDS(paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/whole_model_analytics_",population_threshold,"km.RDS"))
+
+model_data <- all_data$raw_data %>% filter(native == 0)
 
 Uncertainty <- analytics$intervals$width
 InitProbs <- analytics$intervals$mean
 
-all_data_likelihoods <- cbind(raw_data, lake_likelihoods, Uncertainty,InitProbs)
+all_data_likelihoods <- cbind(model_data, lake_likelihoods_wIncrease,lake_likelihoods_noIncrease,  Uncertainty,InitProbs)
+all_data_likelihoods$changeWithTemp <- all_data_likelihoods$lake_likelihoods_wIncrease - all_data_likelihoods$lake_likelihoods_noIncrease
 all_data_likelihoods$UncertaintyLevel <- as.factor(cut(all_data_likelihoods$Uncertainty, c(0, 0.01, 0.05, 0.15, 1.2),
-                                                labels = c("negligible","very low", "low","moderate")))
-all_data_likelihoods$PredictedIntro <- as.factor(cut(all_data_likelihoods$lake_likelihoods, c(-0.01, 0.05, 0.2, 0.5, 1.01),
-                                                       labels = c("very low", "low","moderate","high")))
+                                                       labels = c("negligible","very low", "low","moderate")))
+all_data_likelihoods$PredictedIntro_wIncrease <- as.factor(cut(all_data_likelihoods$lake_likelihoods_wIncrease, c(-0.01, 0.05, 0.2, 0.5, 1.01),
+                                                     labels = c("very low", "low","moderate","high")))
+all_data_likelihoods$PredictedIntro_noIncrease <- as.factor(cut(all_data_likelihoods$lake_likelihoods_noIncrease, c(-0.01, 0.05, 0.2, 0.5, 1.01),
+                                                               labels = c("very low", "low","moderate","high")))
 
 
-summary(all_data_likelihoods)
+# Set minimum and maximum values for change in temp
+min_tempChange_1 <- floor(min(all_data_likelihoods$changeWithTemp)/0.05)*0.05
+max_tempChange_1 <- ceiling(max(all_data_likelihoods$changeWithTemp)/0.05)*0.05
+intervals <- (max_tempChange_1 - min_tempChange_1)/4
+
 
 saveRDS(all_data_likelihoods, file=paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/introduction_likelihoods.RDS"))
 write.csv(all_data_likelihoods, file=paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/introduction_likelihoods.csv"))
 
+print("Saved mapping data, moving on to introductions maps")
+
+#---------------------------------------------------------------------#
+# 7B. Start mapping
+#---------------------------------------------------------------------#
 
 # Produce a map of Norway to use
 Norway<-getData("GADM", country="NO", level=0)
 Norway1<-getData("GADM", country="NO", level=1)
 Norway1_sub<-Norway1[!(Norway1@data$NAME_1 %in% c('Troms', 'Finnmark', 'Nordland')),]
 par(mar=c(1,1,1,1))
-plot(Norway1_sub)
 Norway_df <- fortify(Norway)
 Norway1_sub_df <- fortify(Norway1_sub)
+Norway1_sub_sf <- st_as_sf(Norway1_sub)
+
+# Get native distribution now
+if(focal_species != "Oncorhynchus mykiss") {
+  hk_distribution_map <- readRDS("Data/native_distribution.rds")
+  species_native <- hk_distribution_map[hk_distribution_map$canonicaln == focal_species & 
+                                          hk_distribution_map$establishm == "native",]
+  species_native_intersection <- st_intersection(st_make_valid(species_native), st_as_sf(Norway1_sub))
+  species_native_intersection_union <- st_union(species_native_intersection)
+}
 
 # These are just elements to clear the grid
 theme_opts <- list(theme(panel.grid.minor = element_blank(), panel.grid.major = element_blank(), panel.background = element_blank(), plot.background = element_blank(), axis.line = element_blank(), axis.text.x = element_blank(), axis.text.y = element_blank(), axis.ticks = element_blank(), axis.title.x = element_blank(), axis.title.y = element_blank(), plot.title = element_blank()))
 
 # Let's first plot the initial appearances
+if (focal_species != "Oncorhynchus mykiss") {
 
-initial_appearances <-  ggplot(data=all_data_likelihoods[all_data_likelihoods$presence == 1,]) + 
-  geom_polygon(data=Norway1_sub_df, aes(long,lat,group=group), fill="grey") +
-  geom_hex(aes(x = all_data_likelihoods[all_data_likelihoods$presence == 1,"decimalLongitude"], 
-               y = all_data_likelihoods[all_data_likelihoods$presence == 1,"decimalLatitude"]),
-           binwidth=c(0.3,0.18)) + theme_opts +
-  scale_fill_gradient2(mid="yellow", high="red", #colors in the scale
-                       #midpoint=40,    #same midpoint for plots (mean of the range)
-                       breaks=seq(0,axis_limit,axis_limit/4), #breaks in the scale bar
-                       limits=c(0,axis_limit)) +
-  labs(subtitle=paste0("Current distribution of ",focal_species))
+  # Now let's plot predicted appearances without temp increase, using likelihood of introduction 
+  # over our set threshold
+  predicted_appearances_noIncrease <- ggplot(data=all_data_likelihoods) + 
+    stat_summary_hex(aes(x = decimalLongitude, 
+                         y = decimalLatitude,
+                         z = lake_likelihoods_noIncrease),
+                     bins=n_bins) +
+    # theme_opts +
+    scale_fill_gradient2(mid="yellow", high="red",
+                         breaks=seq(0,1,0.25), #breaks in the scale bar
+                         limits=c(0,1)) +
+    geom_hex(data = filter(all_data_likelihoods, introduced == 1) ,
+             aes(x = decimalLongitude, 
+                 y = decimalLatitude),
+             fill="black",
+             bins=100) + 
+    geom_sf(data = species_native_intersection_union, fill = "dark grey") +
+    geom_sf(data = Norway1_sub_sf, fill = NA,linetype=3) +
+    labs(subtitle=paste0("Forecasted distribution of ",focal_species," in 50 Years")) +
+    xlab("Longitude") +
+    ylab("Latitude")
+  
+  
+  # Now let's plot predicted appearances with temp increase, using likelihood of introduction 
+  # over our set threshold
+  predicted_appearances_wIncrease <- ggplot(data=all_data_likelihoods) + 
+    stat_summary_hex(aes(x = decimalLongitude, 
+                         y = decimalLatitude,
+                         z = changeWithTemp),
+                     bins=n_bins) +
+    # theme_opts +
+    scale_fill_gradient2(low="blue", high="green",
+                         breaks=seq(min_tempChange_1,max_tempChange_1,intervals), #breaks in the scale bar
+                         limits=c(min_tempChange_1,max_tempChange_1)) +
+    geom_hex(data = filter(all_data_likelihoods, introduced == 1) ,
+             aes(x = decimalLongitude, 
+                 y = decimalLatitude),
+             fill="black",
+             bins=100) + 
+    geom_sf(data = species_native_intersection_union, fill = "dark grey") +
+    geom_sf(data = Norway1_sub_sf, fill = NA,linetype=3) +
+    labs(subtitle=paste0("Change in forecasted distribution with temperature increase")) +
+    xlab("Longitude") +
+    ylab("Latitude")
+} else {
+  predicted_appearances_noIncrease <- ggplot(data=all_data_likelihoods) + 
+    stat_summary_hex(aes(x = decimalLongitude, 
+                         y = decimalLatitude,
+                         z = lake_likelihoods_noIncrease),
+                     bins=n_bins) +
+    # theme_opts +
+    scale_fill_gradient2(mid="yellow", high="red",
+                         breaks=seq(0,1,0.25), #breaks in the scale bar
+                         limits=c(0,1)) +
+    geom_hex(data = filter(all_data_likelihoods, introduced == 1) ,
+             aes(x = decimalLongitude, 
+                 y = decimalLatitude),
+             fill="black",
+             bins=100) + 
+    geom_sf(data = Norway1_sub_sf, fill = NA,linetype=3) +
+    labs(subtitle=paste0("Distribution of ",focal_species," in 50 Years")) +
+    xlab("Longitude") +
+    ylab("Latitude")
+  
+  
+  # Now let's plot predicted appearances with temp increase, using likelihood of introduction 
+  # over our set threshold
+  predicted_appearances_wIncrease <- ggplot(data=all_data_likelihoods) +
+    # geom_polygon(data=Norway1_sub_df, aes(long,lat,group=group), fill="grey") +
+    stat_summary_hex(aes(x = decimalLongitude,
+                         y = decimalLatitude,
+                         z = changeWithTemp),
+                     bins=n_bins) +
+    # theme_opts +
+    scale_fill_gradient2(low="blue", high="green",
+                         breaks=seq(min_tempChange_1,max_tempChange_1,intervals), #breaks in the scale bar
+                         limits=c(min_tempChange_1,max_tempChange_1)) +
+    geom_hex(data = filter(all_data_likelihoods, introduced == 1) ,
+             aes(x = decimalLongitude,
+                 y = decimalLatitude),
+             fill="black",
+             bins=100) +
+    geom_sf(data = Norway1_sub_sf, fill = NA,linetype=3) +
+    labs(subtitle=paste0("Change in forecasted distribution with temperature increase")) + 
+    xlab("Longitude") +
+    ylab("Latitude")
+}
+
+print("Plotted predicted introductions, moving onto basins.")
 
 
-# Now let's plot predicted appearances, using likelihood of introduction 
-# over our set threshold
-predicted_appearances <- ggplot(data=all_data_likelihoods[all_data_likelihoods$lake_likelihoods >= prob_threshold,]) + 
-  geom_polygon(data=Norway1_sub_df, aes(long,lat,group=group), fill="grey") +
-  geom_hex(aes(x = all_data_likelihoods[all_data_likelihoods$lake_likelihoods >= prob_threshold,"decimalLongitude"], 
-               y = all_data_likelihoods[all_data_likelihoods$lake_likelihoods >= prob_threshold,"decimalLatitude"]),
-           binwidth=c(0.3,0.18)) + theme_opts +
-  scale_fill_gradient2(mid="yellow", high="red", #colors in the scale
-                       #midpoint=40,    #same midpoint for plots (mean of the range)
-                       breaks=seq(0,axis_limit,axis_limit/4), #breaks in the scale bar
-                       limits=c(0,axis_limit)) +
-  labs(subtitle=paste0("Distribution of ",focal_species," in 50 Years"))
+# Now let's plot averages for water basins
+if (download_basins == TRUE) {
+  pg_user=rstudioapi::askForPassword("Wallace username")
+  pg_password=rstudioapi::askForPassword("password")
 
+  # Need two more connections to get the catchment and basin geometries
+  pool_basin <- dbPool(drv = RPostgreSQL::PostgreSQL(), dbname = 'nofa',
+                       host = 'vm-srv-wallace.vm.ntnu.no', user = pg_user, password = pg_password,
+                       idleTimeout = 36000000,
+                       options="-c search_path=\"Hydrography\""
+  )
+  con_basin <- poolCheckout(pool_basin)
+  basin_import <- tbl(con_basin,"waterregions_dem_10m_nosefi") %>%
+    dplyr::select(gid, geom) %>%
+    filter(gid %in% !!all_data_likelihoods$eb_waterregionID) %>%
+    collect()
+  basin_list <- vector()
+  for(i in seq_len(nrow(basin_import))) {
+    wkb_int <- structure(list(basin_import$geom[i]), class = "WKB")
+    basin_list <- c(basin_list,wkb_int)
+  }
+  basin_geom <- st_as_sfc(basin_list, EWKB = TRUE)
+  basin_geom_sf <- basin_geom %>%
+    st_sf %>%
+    st_cast
+  basin_geom_sf$eb_waterregionID <- basin_import$gid
+  saveRDS(basin_geom_sf,file="./Data/waterRegions.rds")
+} else {
+  basin_geom_sf <- readRDS("./Data/waterRegions.rds")
+}
+
+all_data_likelihoods_basinTransform <- all_data_likelihoods %>%
+  filter(presence == 0)
+
+basin_aggregate <- all_data_likelihoods %>%
+  group_by(eb_waterregionID) %>%
+  summarise(avg_noIncrease = mean(lake_likelihoods_noIncrease),
+            avg_wIncrease = mean(lake_likelihoods_wIncrease))
+
+basin_geom_sf <- st_transform(basin_geom_sf, 4326)
+# inOut_native <- st_intersects(basin_geom_sf,species_native_intersection_union)
+# basin_geom_sf$native <- lengths(inOut_native)
+
+basin_plot_data <- merge(basin_geom_sf,basin_aggregate,all.x=TRUE,by="eb_waterregionID")
+basin_plot_data$change <- basin_plot_data$avg_wIncrease - basin_plot_data$avg_noIncrease
+# basin_plot_data$average <- ifelse(basin_plot_data$present == 1 | basin_plot_data$native == 1, 1, basin_plot_data$avg_noIncrease)
+
+
+basin_map_noIncrease <- ggplot(data=basin_plot_data) +
+  geom_sf(mapping = aes(fill=avg_noIncrease)) +
+  scale_fill_gradient(low="yellow", high="red") +
+  labs(subtitle=paste0("Likelihood of introduction of ",focal_species," in 50 Years by catchment")) +
+  xlab("Longitude") +
+  ylab("Latitude")
+  
+
+basin_map_wIncrease <- ggplot(data=basin_plot_data) +
+  geom_sf(mapping = aes(fill=change)) +
+  scale_fill_gradient2(low="blue", high="green") +
+  labs(subtitle=paste0("Likelihood of introduction of ",focal_species," in 50 Years by catchment")) +
+  xlab("Longitude") +
+  ylab("Latitude")
 
 # Let's first plot the initial appearances
 
@@ -88,17 +249,19 @@ Internal_Uncertainty <- ggplot(data=all_data_likelihoods[all_data_likelihoods$in
 Internal_Prediction <- ggplot(data=all_data_likelihoods[all_data_likelihoods$introduced == 1,]) + 
   geom_polygon(data=Norway1_sub_df, aes(long,lat,group=group), fill="grey") +
   geom_point(aes(x = all_data_likelihoods[all_data_likelihoods$introduced == 1,"decimalLongitude"], 
-               y = all_data_likelihoods[all_data_likelihoods$introduced == 1,"decimalLatitude"],
-               color=PredictedIntro)) + 
+                 y = all_data_likelihoods[all_data_likelihoods$introduced == 1,"decimalLatitude"],
+                 color=PredictedIntro)) + 
   scale_color_manual(values=c("white", "yellow", "orange", "red")) +
-               theme_opts +
+  theme_opts +
   labs(subtitle=paste0("Current distribution of ",focal_species))
 
-maps <- list(initial_appearances = initial_appearances, predicted_appearances = predicted_appearances,
-             Internal_Prediction = Internal_Prediction, Internal_Uncertainty = Internal_Uncertainty)
+maps <- list(predicted_appearances_wIncrease = predicted_appearances_wIncrease,
+             predicted_appearances_noIncrease = predicted_appearances_noIncrease, Internal_Prediction = Internal_Prediction, 
+             Internal_Uncertainty = Internal_Uncertainty, basin_map_noIncrease = basin_map_noIncrease,
+             basin_map_wIncrease = basin_map_wIncrease)
 
 
-saveRDS(maps, file=paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/maps.RDS"))
+saveRDS(maps, file=paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/maps_",population_threshold,"km.RDS"))
 
 
 
