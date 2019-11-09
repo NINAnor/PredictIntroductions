@@ -6,13 +6,8 @@
 
 # This will actually be a script for checking either model
 
-if (use_buffered_model == TRUE) {
-  model_output <- readRDS(paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/buffered_model_output.RDS"))
-  model_data_extra <- readRDS(paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/buffered_model_data.RDS"))
-} else {
-  model_output <- readRDS(paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/whole_model_output_",population_threshold,"km.RDS"))
-  model_data_extra <- readRDS(paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/whole_model_data_",population_threshold,"km.RDS"))
-}
+model_output <- readRDS(paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/whole_model_output_",population_threshold,"km.RDS"))
+model_data_extra <- readRDS(paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/whole_model_data_",population_threshold,"km.RDS"))
 
 # Define which distance threshold we're using
 raw_data <- model_data_extra$raw_data
@@ -32,6 +27,9 @@ alpha <- model_output$alpha
 ### At this point let's run some quick convergence diagnostics. Values for gelman 
 #   diagnostics should be close to 1, for the effective size the higher the better.
 gelmans <- coda::gelman.diag(calculate(beta,draws),multivariate = FALSE)
+number_converged <- nrow(gelmans$psrf[gelmans$psrf[,1] < 1.1,])
+print(paste0(number_converged," of ",nrow(gelmans$psrf)," parameters converged."))
+
 effective_sizes <- summary(coda::effectiveSize(calculate(beta,draws)))
 
 
@@ -51,7 +49,13 @@ data_4scaling <- data_4scaling %>%
             pop_distL = log(dist_n_pop+1),
             SCI = log(((perimeter_m/1000)/(2*sqrt(pi*area_km2)))+1),
             HFP = HFP,
-            n_pop = log(no_n_pop+1))
+            n_pop = log(no_n_pop+1),
+            upstream_pop = log(upstream_pops+1),
+            downstream_pop = log(downstream_pops+1))
+
+if(!is.na(parameters_to_ignore)) {
+  data_4scaling <- data_4scaling[,-parameters_to_ignore]
+}
 
 # Get the means and sds to work with
 means_relData <- apply(data_4scaling, 2, mean)
@@ -126,9 +130,6 @@ if (nrow(env_data_scaled) < 10000) {
 }
 
 
-
-
-
 colnames(intVal_mat) <- c("lower","mean","upper")
 
 intVal_mat$width <- with(intVal_mat,(upper-lower)/2)
@@ -145,10 +146,5 @@ beta_ints <- get_beta_list(draws,beta_shared=beta,species_names="introduced",
 model_analysis <- list(intervals = intVal_mat, deviance = model_deviance, 
                        conv_diags = list(gelmans, effective_sizes), parameter_estimates = beta_ints)
 
-
-if (use_buffered_model == TRUE) {
-  saveRDS(model_analysis,paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/buffered_model_analytics.RDS"))
-} else {
-  saveRDS(model_analysis,paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/whole_model_analytics_",population_threshold,"km.RDS"))
-}
+saveRDS(model_analysis,paste0("./Data/Species_Data/",gsub(' ','_',focal_species),"/whole_model_analytics_",population_threshold,"km.RDS"))
 
