@@ -14,9 +14,9 @@
 # 
 #---------------------------------------------------------------------#
 
-# If this is the first time downloading a species, you will need the following code to initiate the download.
-# If you already have already initiated the download and the file is waiting, you can skip to 1B
-
+# THe following initiates a download of your data. If it hasn't already been
+# downloaded, it will require you to run the script again later when the
+# download has finished.
 
 if (initiate_download == TRUE) {
   # set GBIF user account credentials 
@@ -86,20 +86,18 @@ species_dist_short$longitude <- species_dist_short$decimalLongitude
 species_dist_short$latitude <- species_dist_short$decimalLatitude
 species_dist_short$scientificNameShort <- word(species_dist_short$scientificName, 1,2, sep=" ")
 
-# Have to convert it using the sf package first. 
-# Also, convert to projected CRS (same as lake dataset below EPSG 25833)
-# in order to calculate distances.
+# Have to convert it using the sf package first. Standard CRS uses the EPSG 32633.
 dist_sf <- st_as_sf(species_dist_short, coords = c("longitude", "latitude"), 
                     crs = 4326)
-dist_sf <- st_transform(dist_sf, 25833)
+dist_sf <- st_transform(dist_sf, 32633)
 
 
-# Download lake dataset 
+# Following code brings the lake map down off box, so you'll need access to the box folder.
 if (download_lakes == TRUE) {
   temp <- tempdir()
-  lake_download_url <- "https://api.loke.aws.unit.no/dlr-gui-backend-resources-content/v2/contents/links/aa79c15a-eb88-489b-8b20-4cb6275766cd4f48325a-d84b-4395-93ea-ccd3283c8d04197a8a81-9d30-4f94-a3c3-b4c2532fc2a5"
-  download.file(lake_download_url,destfile = paste0(temp,"/lake_polygons.rds"))
-  lakes <- readRDS(paste0(temp,"/lake_polygons.rds"))
+  download.file("https://ntnu.box.com/shared/static/6vu4de2birf9onmej2gorexwaxposuaa.zip",destfile = paste0(temp,"/NVE_innsjodatabasen.zip"))
+  unzip(paste0(temp,"/NVE_innsjodatabasen.zip"),exdir=temp)
+  lakes <- st_read(paste0(temp,"/Innsjo_Innsjo.shp"))
   saveRDS(lakes,"./Data/lake_polygons.rds")
 } else {
   lakes <- readRDS("./Data/lake_polygons.rds")
